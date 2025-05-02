@@ -26,7 +26,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STOPWORDS_PATH = os.path.join(BASE_DIR, 'korean_stopwords.txt')
 SENTIMENT_DICT_PATH = os.path.join(BASE_DIR, 'knu_sentiment_lexicon.csv')
 
-# Supabase 설정
+# Supabase 설정 - 
+# SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://hpppixewlhogxjknkrgh.supabase.co')
+# SUPABASE_KEY = os.environ.get('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwcHBpeGV3bGhvZ3hqa25rcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUzMDE1NzMsImV4cCI6MjA2MDg3NzU3M30.VUt0dnWpG0Da3CgdvOyH0QbGqI-XY8wHDRoVt2hu6so')
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 SUPABASE_BUCKET = 'lda-text-data'  # Supabase 버킷 이름
@@ -418,7 +420,441 @@ def analyze():
             print(f"감정 워드클라우드 생성 오류: {sentiment_cloud_error}")
             results['pos_wordcloud_path'] = ''
             results['neg_wordcloud_path'] = ''
+
             
+        # 9. 토픽 점유율 차트
+        try:
+            if hasattr(analyzer, 'lda_model') and analyzer.lda_model is not None:
+                # 토픽 분포 계산
+                topic_distribution = analyzer.lda_model.transform(analyzer.tf_idf_matrix)
+                topic_shares = topic_distribution.mean(axis=0)
+                
+                # 토픽별 색상 설정
+                colors = plt.cm.tab10(np.arange(len(topic_shares)))
+                
+                # 토픽 이름 생성
+                topic_names = [f"토픽 {i+1}" for i in range(len(topic_shares))]
+                
+                # 한글 폰트 설정
+                plt.rcParams['font.family'] = 'Malgun Gothic'
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                # 파이 차트 생성
+                plt.figure(figsize=(10, 8))
+                plt.pie(topic_shares, labels=topic_names, autopct='%1.1f%%', 
+                        colors=colors, startangle=90, shadow=True, textprops={'fontsize': 12, 'fontfamily': 'Malgun Gothic'})
+                plt.title('토픽 점유율', fontsize=16, fontfamily='Malgun Gothic')
+                plt.axis('equal')
+                
+                # # 파이 차트 저장
+                # topic_shares_path = os.path.join(BASE_DIR, 'static', 'topic_shares.png')
+                # plt.savefig(topic_shares_path, bbox_inches='tight')
+                # plt.close()
+                
+                # results['topic_shares_path'] = '/static/topic_shares.png'
+                # results['topic_shares_data'] = [float(share) for share in topic_shares]
+
+            # 이미지 데이터를 메모리에 저장
+            topic_img_data = io.BytesIO()
+            plt.savefig(topic_img_data, format='png', bbox_inches='tight')
+            topic_img_data.seek(0)
+            plt.close()
+            
+            # Supabase가 활성화된 경우 이미지를 Supabase Storage에 업로드
+            if supabase:
+                topic_shares_path = f"images/topic_shares_{uuid.uuid4()}.png"
+                supabase.storage.from_(SUPABASE_BUCKET).upload(
+                    topic_shares_path,
+                    topic_img_data.getvalue()
+                )
+                results['topic_shares_path'] = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(topic_shares_path)
+            else:
+                # 로컬 저장
+                topic_shares_path = os.path.join(BASE_DIR, 'static', 'topic_shares.png')
+                with open(topic_shares_path, 'wb') as f:
+                    f.write(topic_img_data.getvalue())
+                results['topic_shares_path'] = '/static/topic_shares.png'
+            
+            results['topic_shares_data'] = [float(share) for share in topic_shares]
+
+        except Exception as topic_error:
+            print(f"토픽 점유율 차트 생성 오류: {topic_error}")
+            results['topic_shares_path'] = ''
+            results['topic_shares_data'] = []
+            
+        # 10. 중심성 분석 차트
+        try:
+            if 'network_path' in results and results['network_path']:
+                # 이미 네트워크가 생성되어 있으므로 중심성 분석 수행
+                network = analyzer.keyword_network_analysis(threshold=2, top_n=30)
+                
+                # 중심성 계산
+                degree_centrality = nx.degree_centrality(network)
+                betweenness_centrality = nx.betweenness_centrality(network, k=10)
+                
+                try:
+                    eigenvector_centrality = nx.eigenvector_centrality_numpy(network)
+                except:
+                    # 대체: 연결 중심성 사용
+                    eigenvector_centrality = degree_centrality
+                
+                # 상위 10개 노드만 선택
+                top_degree = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+                top_nodes = [item[0] for item in top_degree]
+                
+                # 각 중심성 값 추출
+                degree_vals = [degree_centrality[node] for node in top_nodes]
+                betweenness_vals = [betweenness_centrality[node] for node in top_nodes]
+                eigenvector_vals = [eigenvector_centrality[node] for node in top_nodes]
+                
+                # 한글 폰트 설정
+                plt.rcParams['font.family'] = 'Malgun Gothic'
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                # 막대 그래프 생성
+                plt.figure(figsize=(12, 8))
+                x = range(len(top_nodes))
+                width = 0.25  # 막대 너비
+                
+                plt.bar([i - width for i in x], degree_vals, width, label='연결 중심성', color='skyblue')
+                plt.bar(x, betweenness_vals, width, label='매개 중심성', color='lightgreen')
+                plt.bar([i + width for i in x], eigenvector_vals, width, label='고유벡터 중심성', color='salmon')
+                
+                plt.xlabel('키워드', fontsize=12, fontfamily='Malgun Gothic')
+                plt.ylabel('중심성 값', fontsize=12, fontfamily='Malgun Gothic')
+                plt.title('키워드 중심성 분석 (상위 10개)', fontsize=16, fontfamily='Malgun Gothic')
+                plt.xticks(x, top_nodes, rotation=45, ha='right', fontfamily='Malgun Gothic')
+                plt.legend(prop={'family': 'Malgun Gothic'})
+                plt.tight_layout()
+                
+                # 이미지 데이터를 메모리에 저장
+                centrality_img_data = io.BytesIO()
+                plt.savefig(centrality_img_data, format='png', bbox_inches='tight')
+                centrality_img_data.seek(0)
+                plt.close()
+                
+                # Supabase가 활성화된 경우 이미지를 Supabase Storage에 업로드
+                if supabase:
+                    centrality_path = f"images/centrality_{uuid.uuid4()}.png"
+                    supabase.storage.from_(SUPABASE_BUCKET).upload(
+                        centrality_path,
+                        centrality_img_data.getvalue()
+                    )
+                    results['centrality_path'] = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(centrality_path)
+                else:
+                    # 로컬 저장
+                    centrality_path = os.path.join(BASE_DIR, 'static', 'centrality_analysis.png')
+                    with open(centrality_path, 'wb') as f:
+                        f.write(centrality_img_data.getvalue())
+                    results['centrality_path'] = '/static/centrality_analysis.png'
+
+                results['top_nodes'] = top_nodes
+                results['centrality_data'] = {
+                    'degree': degree_vals,
+                    'betweenness': betweenness_vals,
+                    'eigenvector': eigenvector_vals
+                }
+        except Exception as centrality_error:
+            print(f"중심성 분석 차트 생성 오류: {centrality_error}")
+            results['centrality_path'] = ''
+            
+        # 11. 클러스터링 분석
+        try:
+            if 'network_path' in results and results['network_path']:
+                network = analyzer.keyword_network_analysis(threshold=2, top_n=30)
+                
+                # 커뮤니티 탐지
+                communities = list(nx.algorithms.community.greedy_modularity_communities(network))
+                
+                # 노드별 커뮤니티 할당
+                node_community = {}
+                for i, community in enumerate(communities):
+                    for node in community:
+                        node_community[node] = i
+                
+                # 노드 크기와 엣지 두께 설정
+                node_sizes = [network.nodes[node]['size'] * 30 for node in network.nodes()]
+                edge_weights = [network.edges[edge]['weight'] for edge in network.edges()]
+                
+                # 각 커뮤니티별 색상 설정
+                community_colors = [plt.cm.tab20(i) for i in range(len(communities))]
+                node_colors = [community_colors[node_community.get(node, 0)] for node in network.nodes()]
+                
+                # 레이아웃 설정
+                pos = nx.spring_layout(network, k=0.3, seed=42)
+                
+                # 한글 폰트 설정
+                plt.rcParams['font.family'] = 'Malgun Gothic'
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                # 그래프 그리기
+                plt.figure(figsize=(15, 15))
+                nx.draw_networkx_nodes(network, pos, node_size=node_sizes, 
+                                    node_color=node_colors, alpha=0.8)
+                nx.draw_networkx_edges(network, pos, width=edge_weights, alpha=0.3)
+                nx.draw_networkx_labels(network, pos, font_size=10, font_family='Malgun Gothic')
+                
+                # 커뮤니티 정보 추가
+                for i, community in enumerate(communities[:5]):  # 상위 5개 커뮤니티만 라벨 표시
+                    if community:
+                        # 커뮤니티 중심 계산
+                        comm_center_x = sum(pos[node][0] for node in community) / len(community)
+                        comm_center_y = sum(pos[node][1] for node in community) / len(community)
+                        
+                        # 커뮤니티 주요 키워드 추출 (상위 3개)
+                        top_words = sorted([(node, network.nodes[node]['size']) for node in community], 
+                                        key=lambda x: x[1], reverse=True)[:3]
+                        comm_label = f"클러스터 {i+1}\n" + ", ".join([word for word, _ in top_words])
+                        
+                        plt.text(comm_center_x, comm_center_y, comm_label, 
+                                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'),
+                                horizontalalignment='center', fontsize=12, family='Malgun Gothic')
+                
+                plt.axis('off')
+                plt.title('키워드 클러스터 분석', fontsize=16, fontfamily='Malgun Gothic')
+                
+                # # 그래프 저장
+                # clustering_path = os.path.join(BASE_DIR, 'static', 'clustering_analysis.png')
+                # plt.savefig(clustering_path, bbox_inches='tight')
+                # plt.close()
+                
+                # results['clustering_path'] = '/static/clustering_analysis.png'
+
+                # 이미지 데이터를 메모리에 저장
+                clustering_img_data = io.BytesIO()
+                plt.savefig(clustering_img_data, format='png', bbox_inches='tight')
+                clustering_img_data.seek(0)
+                plt.close()
+                
+                # Supabase가 활성화된 경우 이미지를 Supabase Storage에 업로드
+                if supabase:
+                    clustering_path = f"images/clustering_{uuid.uuid4()}.png"
+                    supabase.storage.from_(SUPABASE_BUCKET).upload(
+                        clustering_path,
+                        clustering_img_data.getvalue()
+                    )
+                    results['clustering_path'] = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(clustering_path)
+                else:
+                    # 로컬 저장
+                    clustering_path = os.path.join(BASE_DIR, 'static', 'clustering_analysis.png')
+                    with open(clustering_path, 'wb') as f:
+                        f.write(clustering_img_data.getvalue())
+                    results['clustering_path'] = '/static/clustering_analysis.png'
+
+                # 커뮤니티 정보 추가
+                community_info = []
+                for i, community in enumerate(communities[:5]):
+                    if community:
+                        top_words = sorted([(node, network.nodes[node]['size']) for node in community], 
+                                        key=lambda x: x[1], reverse=True)[:5]
+                        community_info.append({
+                            'id': i + 1,
+                            'size': len(community),
+                            'top_words': [{'word': word, 'size': size} for word, size in top_words]
+                        })
+                
+                results['community_info'] = community_info
+        except Exception as clustering_error:
+            print(f"클러스터링 분석 생성 오류: {clustering_error}")
+            results['clustering_path'] = ''
+            
+        # 12. 키워드 영향력 버블 차트
+        try:
+            if 'centrality_path' in results and results['centrality_path']:
+                network = analyzer.keyword_network_analysis(threshold=2, top_n=30)
+                
+                # 중심성 계산 (이미 위에서 계산됨)
+                degree_centrality = nx.degree_centrality(network)
+                betweenness_centrality = nx.betweenness_centrality(network, k=10)
+                
+                try:
+                    eigenvector_centrality = nx.eigenvector_centrality_numpy(network)
+                except:
+                    eigenvector_centrality = degree_centrality
+                
+                # 상위 20개 노드 선택
+                top_centrality = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:20]
+                nodes = [item[0] for item in top_centrality]
+                
+                # 각 노드의 크기, 색상 결정
+                sizes = [network.nodes[node]['size'] * 100 for node in nodes]
+                colors = [eigenvector_centrality[node] for node in nodes]
+                
+                # 버블 차트 생성
+                plt.figure(figsize=(12, 8))
+                
+                # 한글 폰트 설정
+                plt.rcParams['font.family'] = 'Malgun Gothic'
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                x = [degree_centrality[node] for node in nodes]  # 연결 중심성
+                y = [betweenness_centrality[node] for node in nodes]  # 매개 중심성
+                
+                scatter = plt.scatter(x, y, s=sizes, c=colors, alpha=0.7, cmap='viridis', 
+                                    edgecolors='gray', linewidths=1)
+                
+                # 각 노드에 라벨 추가
+                for i, node in enumerate(nodes):
+                    plt.annotate(node, (x[i], y[i]), 
+                                xytext=(5, 5), textcoords='offset points', 
+                                fontsize=9, alpha=0.8, fontfamily='Malgun Gothic')
+                
+                plt.colorbar(scatter, label='고유벡터 중심성')
+                plt.xlabel('연결 중심성', fontsize=12, fontfamily='Malgun Gothic')
+                plt.ylabel('매개 중심성', fontsize=12, fontfamily='Malgun Gothic')
+                plt.title('키워드 영향력 버블 차트', fontsize=16, fontfamily='Malgun Gothic')
+                
+                # # 차트 저장
+                # bubble_path = os.path.join(BASE_DIR, 'static', 'keyword_influence_bubble.png')
+                # plt.savefig(bubble_path, bbox_inches='tight')
+                # plt.close()
+                
+                # results['bubble_path'] = '/static/keyword_influence_bubble.png'
+
+                # 이미지 데이터를 메모리에 저장
+                bubble_img_data = io.BytesIO()
+                plt.savefig(bubble_img_data, format='png', bbox_inches='tight')
+                bubble_img_data.seek(0)
+                plt.close()
+                
+                # Supabase가 활성화된 경우 이미지를 Supabase Storage에 업로드
+                if supabase:
+                    bubble_path = f"images/bubble_{uuid.uuid4()}.png"
+                    supabase.storage.from_(SUPABASE_BUCKET).upload(
+                        bubble_path,
+                        bubble_img_data.getvalue()
+                    )
+                    results['bubble_path'] = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(bubble_path)
+                else:
+                    # 로컬 저장
+                    bubble_path = os.path.join(BASE_DIR, 'static', 'keyword_influence_bubble.png')
+                    with open(bubble_path, 'wb') as f:
+                        f.write(bubble_img_data.getvalue())
+                    results['bubble_path'] = '/static/keyword_influence_bubble.png'       
+
+                # 버블 차트 데이터
+                bubble_data = []
+                for i, node in enumerate(nodes):
+                    bubble_data.append({
+                        'word': node,
+                        'x': float(x[i]),  # 연결 중심성
+                        'y': float(y[i]),  # 매개 중심성
+                        'size': int(sizes[i] / 100),  # 크기 (빈도수)
+                        'color': float(colors[i])  # 색상 (고유벡터 중심성)
+                    })
+                
+                results['bubble_data'] = bubble_data
+        except Exception as bubble_error:
+            print(f"키워드 영향력 버블 차트 생성 오류: {bubble_error}")
+            results['bubble_path'] = ''
+            
+        # 13. 키워드 군집 3D 시각화
+        try:
+            from mpl_toolkits.mplot3d import Axes3D
+            from sklearn.manifold import TSNE
+            
+            if len(analyzer.tokenized_corpus) > 0 and hasattr(analyzer, 'tf_idf_matrix'):
+                # 상위 100개 키워드 선택
+                all_words = [word for doc in analyzer.tokenized_corpus for word in doc]
+                word_counts = Counter(all_words)
+                top_words = [word for word, _ in word_counts.most_common(100)]
+                
+                # 단어 벡터 생성을 위한 인덱스 찾기
+                word_indices = [list(analyzer.tf_idf_feature_names).index(word) 
+                                for word in top_words if word in analyzer.tf_idf_feature_names]
+                
+                if word_indices:
+                    # TF-IDF 행렬에서 해당 단어들의 벡터 추출
+                    word_vectors = np.zeros((len(word_indices), analyzer.tf_idf_matrix.shape[0]))
+                    for i, idx in enumerate(word_indices):
+                        word_vectors[i] = analyzer.tf_idf_matrix[:, idx].toarray().flatten()
+                    
+                    # t-SNE로 3차원 축소
+                    tsne = TSNE(n_components=3, random_state=42, perplexity=min(30, max(5, len(word_indices)//5)))
+                    word_vectors_3d = tsne.fit_transform(word_vectors)
+                    
+                    # 3D 시각화
+                    fig = plt.figure(figsize=(12, 10))
+                    ax = fig.add_subplot(111, projection='3d')
+                    
+                    # 한글 폰트 설정
+                    plt.rcParams['font.family'] = 'Malgun Gothic'
+                    plt.rcParams['axes.unicode_minus'] = False
+                    
+                    # 커뮤니티 정보 가져오기 (이전 클러스터링 분석에서 계산됨)
+                    if 'community_info' in results:
+                        # 네트워크 재생성 및 커뮤니티 탐지
+                        network = analyzer.keyword_network_analysis(threshold=2, top_n=50)
+                        communities = list(nx.algorithms.community.greedy_modularity_communities(network))
+                        
+                        # 단어별 커뮤니티 매핑
+                        word_to_community = {}
+                        for i, community in enumerate(communities):
+                            for word in community:
+                                word_to_community[word] = i
+                        
+                        # 각 단어의 색상 및 크기 설정
+                        colors = []
+                        sizes = []
+                        visible_words = []
+                        visible_coords = []
+                        
+                        for i, word in enumerate(top_words):
+                            if i < len(word_indices):
+                                community_id = word_to_community.get(word, 0)
+                                colors.append(community_id)
+                                sizes.append(word_counts.get(word, 1) * 20)
+                                visible_words.append(word)
+                                visible_coords.append(word_vectors_3d[i])
+                        
+                        if visible_coords:
+                            visible_coords = np.array(visible_coords)
+                            scatter = ax.scatter(
+                                visible_coords[:, 0], visible_coords[:, 1], visible_coords[:, 2],
+                                c=colors, s=sizes, alpha=0.7, cmap='tab20'
+                            )
+                            
+                            # 주요 키워드에만 라벨 추가
+                            threshold = np.percentile([word_counts.get(w, 0) for w in visible_words], 70)
+                            for i, word in enumerate(visible_words):
+                                if word_counts.get(word, 0) > threshold:
+                                    ax.text(visible_coords[i, 0], visible_coords[i, 1], visible_coords[i, 2], 
+                                          word, fontsize=9, fontfamily='Malgun Gothic')
+                            
+                            ax.set_title('키워드 3D 군집 시각화', fontsize=16, fontfamily='Malgun Gothic')
+                            plt.tight_layout()
+                            
+                            # # 3D 클러스터 저장
+                            # clusters_3d_path = os.path.join(BASE_DIR, 'static', 'keyword_3d_clusters.png')
+                            # plt.savefig(clusters_3d_path, bbox_inches='tight')
+                            # plt.close()
+                            
+                            # 이미지 데이터를 메모리에 저장
+                            clusters_3d_img_data = io.BytesIO()
+                            plt.savefig(clusters_3d_img_data, format='png', bbox_inches='tight')
+                            clusters_3d_img_data.seek(0)
+                            plt.close()
+                            
+                            # Supabase가 활성화된 경우 이미지를 Supabase Storage에 업로드
+                            if supabase:
+                                clusters_3d_path = f"images/clusters3d_{uuid.uuid4()}.png"
+                                supabase.storage.from_(SUPABASE_BUCKET).upload(
+                                    clusters_3d_path,
+                                    clusters_3d_img_data.getvalue()
+                                )
+                                results['clusters3d_path'] = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(clusters_3d_path)
+                            else:
+                                # 로컬 저장
+                                clusters_3d_path = os.path.join(BASE_DIR, 'static', 'keyword_3d_clusters.png')
+                                with open(clusters_3d_path, 'wb') as f:
+                                    f.write(clusters_3d_img_data.getvalue())
+                                results['clusters3d_path'] = '/static/keyword_3d_clusters.png'
+                    
+        except Exception as clusters_3d_error:
+            print(f"키워드 군집 3D 시각화 생성 오류: {clusters_3d_error}")
+            results['clusters3d_path'] = ''
+
+
         # Supabase가 활성화된 경우 더 이상 필요없는 임시 파일 삭제
         if supabase and os.path.exists(file_path):
             os.remove(file_path)
@@ -552,5 +988,8 @@ def download_pdf():
         app.logger.error(f"ZIP 다운로드 오류: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# if __name__ == '__main__':
+#     app.run(debug=True, threaded=False, use_reloader=False)
+
 if __name__ == '__main__':
-    app.run(debug=True, threaded=False, use_reloader=False)
+    app.run(host='192.168.0.10', port=5000, debug=False, threaded=False)
