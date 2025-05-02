@@ -26,9 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STOPWORDS_PATH = os.path.join(BASE_DIR, 'korean_stopwords.txt')
 SENTIMENT_DICT_PATH = os.path.join(BASE_DIR, 'knu_sentiment_lexicon.csv')
 
-# Supabase 설정 - 
-# SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://hpppixewlhogxjknkrgh.supabase.co')
-# SUPABASE_KEY = os.environ.get('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhwcHBpeGV3bGhvZ3hqa25rcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUzMDE1NzMsImV4cCI6MjA2MDg3NzU3M30.VUt0dnWpG0Da3CgdvOyH0QbGqI-XY8wHDRoVt2hu6so')
+# Supabase 설정 - 본인 URL과 KEY 입력하기 없으면 data폴더에 저장됨
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 SUPABASE_BUCKET = 'lda-text-data'  # Supabase 버킷 이름
