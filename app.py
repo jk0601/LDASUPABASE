@@ -990,4 +990,4 @@ def download_pdf():
 #     app.run(debug=True, threaded=False, use_reloader=False)
 
 if __name__ == '__main__':
-    app.run(host='192.168.0.10', port=5000, debug=False, threaded=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=False)
